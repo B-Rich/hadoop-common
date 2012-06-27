@@ -46,8 +46,10 @@ import org.apache.hadoop.hdfs.server.protocol.RemoteEditLog;
 import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.hdfs.util.MD5FileUtils;
 import org.apache.hadoop.http.HttpServer;
+import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.MD5Hash;
 import org.apache.hadoop.security.UserGroupInformation;
+import org.apache.hadoop.util.ServletUtil;
 import org.apache.hadoop.util.StringUtils;
 
 import com.google.common.annotations.VisibleForTesting;
@@ -126,23 +128,50 @@ public class GetImageServlet extends HttpServlet {
               throw new IOException(errorMessage);
             }
             CheckpointFaultInjector.getInstance().beforeGetImageSetsHeaders();
-            setFileNameHeaders(response, imageFile);
-            setVerificationHeaders(response, imageFile);
-            // send fsImage
-            TransferFsImage.getFileServer(response.getOutputStream(), imageFile,
-                getThrottler(conf)); 
+            FileInputStream fis = new FileInputStream(imageFile);
+            try {
+              setFileNameHeaders(response, imageFile);
+              setVerificationHeaders(response, imageFile);
+              if (!imageFile.exists()) {
+                // Potential race where the file was deleted while we were in the
+                // process of setting headers!
+                throw new FileNotFoundException();
+                // It's possible the file could be deleted after this point, but
+                // we've already opened the 'fis' stream.
+                // It's also possible length could change, but this would be
+                // detected by the client side as an inaccurate length header.
+              }
+              // send fsImage
+              TransferFsImage.getFileServer(response, imageFile, fis,
+                  getThrottler(conf));
+            } finally {
+              IOUtils.closeStream(fis);
+            }
           } else if (parsedParams.isGetEdit()) {
             long startTxId = parsedParams.getStartTxId();
             long endTxId = parsedParams.getEndTxId();
             
             File editFile = nnImage.getStorage()
                 .findFinalizedEditsFile(startTxId, endTxId);
-            setVerificationHeaders(response, editFile);
-            
-            setFileNameHeaders(response, editFile);
-            // send edits
-            TransferFsImage.getFileServer(response.getOutputStream(), editFile,
-                getThrottler(conf));
+            FileInputStream fis = new FileInputStream(editFile);
+            try {
+              setVerificationHeaders(response, editFile);
+              setFileNameHeaders(response, editFile);
+              if (!editFile.exists()) {
+                // Potential race where the file was deleted while we were in the
+                // process of setting headers!
+                throw new FileNotFoundException();
+                // It's possible the file could be deleted after this point, but
+                // we've already opened the 'fis' stream.
+                // It's also possible length could change, but this would be
+                // detected by the client side as an inaccurate length header.
+              }
+              // send edits
+              TransferFsImage.getFileServer(response, editFile, fis,
+                  getThrottler(conf));
+            } finally {
+              IOUtils.closeStream(fis);
+            }
           } else if (parsedParams.isPutImage()) {
             final long txid = parsedParams.getTxId();
 
@@ -193,7 +222,7 @@ public class GetImageServlet extends HttpServlet {
     }
   }
   
-  private static void setFileNameHeaders(HttpServletResponse response,
+  public static void setFileNameHeaders(HttpServletResponse response,
       File file) {
     response.setHeader(CONTENT_DISPOSITION, "attachment; filename=" +
         file.getName());
@@ -205,7 +234,7 @@ public class GetImageServlet extends HttpServlet {
    * @param conf configuration
    * @return a data transfer throttler
    */
-  private final DataTransferThrottler getThrottler(Configuration conf) {
+  public final static DataTransferThrottler getThrottler(Configuration conf) {
     long transferBandwidth = 
       conf.getLong(DFSConfigKeys.DFS_IMAGE_TRANSFER_RATE_KEY,
                    DFSConfigKeys.DFS_IMAGE_TRANSFER_RATE_DEFAULT);
@@ -263,7 +292,7 @@ public class GetImageServlet extends HttpServlet {
    * Set headers for content length, and, if available, md5.
    * @throws IOException 
    */
-  private void setVerificationHeaders(HttpServletResponse response, File file)
+  public static void setVerificationHeaders(HttpServletResponse response, File file)
   throws IOException {
     response.setHeader(TransferFsImage.CONTENT_LENGTH,
         String.valueOf(file.length()));
@@ -336,7 +365,7 @@ public class GetImageServlet extends HttpServlet {
         if (key.equals("getimage")) { 
           isGetImage = true;
           try {
-            txId = parseLongParam(request, TXID_PARAM);
+            txId = ServletUtil.parseLongParam(request, TXID_PARAM);
           } catch (NumberFormatException nfe) {
             if (request.getParameter(TXID_PARAM).equals(LATEST_FSIMAGE_VALUE)) {
               fetchLatest = true;
@@ -346,11 +375,11 @@ public class GetImageServlet extends HttpServlet {
           }
         } else if (key.equals("getedit")) { 
           isGetEdit = true;
-          startTxId = parseLongParam(request, START_TXID_PARAM);
-          endTxId = parseLongParam(request, END_TXID_PARAM);
+          startTxId = ServletUtil.parseLongParam(request, START_TXID_PARAM);
+          endTxId = ServletUtil.parseLongParam(request, END_TXID_PARAM);
         } else if (key.equals("putimage")) { 
           isPutImage = true;
-          txId = parseLongParam(request, TXID_PARAM);
+          txId = ServletUtil.parseLongParam(request, TXID_PARAM);
         } else if (key.equals("port")) { 
           remoteport = new Integer(val[0]).intValue();
         } else if (key.equals(STORAGEINFO_PARAM)) {
@@ -406,16 +435,5 @@ public class GetImageServlet extends HttpServlet {
       return fetchLatest;
     }
     
-    private static long parseLongParam(HttpServletRequest request, String param)
-        throws IOException {
-      // Parse the 'txid' parameter which indicates which image is to be
-      // fetched.
-      String paramStr = request.getParameter(param);
-      if (paramStr == null) {
-        throw new IOException("Invalid request has no " + param + " parameter");
-      }
-      
-      return Long.valueOf(paramStr);
-    }
   }
 }
