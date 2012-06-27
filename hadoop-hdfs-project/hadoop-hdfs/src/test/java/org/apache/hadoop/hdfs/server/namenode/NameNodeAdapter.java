@@ -17,11 +17,16 @@
  */
 package org.apache.hadoop.hdfs.server.namenode;
 
+import static org.mockito.Matchers.anyInt;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.spy;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import org.apache.hadoop.fs.UnresolvedLinkException;
+import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.permission.PermissionStatus;
 import org.apache.hadoop.hdfs.protocol.DatanodeID;
 import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
@@ -183,6 +188,15 @@ public class NameNodeAdapter {
     }
   }
   
+  public static FSEditLogOp createMkdirOp(String path) {
+    MkdirOp op = MkdirOp.getInstance(new FSEditLogOp.OpInstanceCache())
+      .setPath(path)
+      .setTimestamp(0)
+      .setPermissionStatus(new PermissionStatus(
+              "testuser", "testgroup", FsPermission.getDefault()));
+    return op;
+  }
+  
   /**
    * @return the number of blocks marked safe by safemode, or -1
    * if safemode is not running.
@@ -209,5 +223,17 @@ public class NameNodeAdapter {
   
   public static File getInProgressEditsFile(StorageDirectory sd, long startTxId) {
     return NNStorage.getInProgressEditsFile(sd, startTxId);
+  }
+
+  
+  /**
+   * Spy on the edit log's Runtime instance, preventing Runtime.exit()
+   * from actually exiting.
+   */
+  public static Runtime spyOnEditLogRuntime(NameNode nn) {
+    Runtime runtime = Runtime.getRuntime();
+    runtime = spy(runtime);
+    nn.getFSImage().getEditLog().setRuntimeForTesting(runtime);
+    return runtime;
   }
 }

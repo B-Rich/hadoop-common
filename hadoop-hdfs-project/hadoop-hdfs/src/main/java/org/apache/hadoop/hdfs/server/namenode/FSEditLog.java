@@ -1144,6 +1144,7 @@ public class FSEditLog  {
       journalSet.recoverUnfinalizedSegments();
     } catch (IOException ex) {
       // All journals have failed, it is handled in logSync.
+      // TODO: are we sure this is OK?
     }
   }
 
@@ -1271,5 +1272,9 @@ public class FSEditLog  {
       throw new IllegalArgumentException("Unable to construct journal, "
                                          + uri, e);
     }
+  }
+
+  public void format() {
+    // TODO Auto-generated method stub
   }
 }
